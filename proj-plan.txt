@@ -1,0 +1,17 @@
+
+
+Building Wasm Language server in zig
+	- [X] Build Tokenizer
+	- [ ] Build AST Based on Tokenizer
+	         [  ] - Find resource to handle ast processing
+	         [  ] - Find a way to handle built-in functions
+	         [  ] - Tests
+	- [ ] Diagnostic handler
+		- [ ] - Find ways to collect errors in AST?
+		- [ ] - Publish diagnostic on update and open.
+	- [ ] Symbol Handler
+	- [ ] Semantic Highlihgting Handler
+	- [ ] Definition handler
+	- [ ] Import Resolution 
+		- [ ] Find a place where import resulting is necessary (go to definition wouldn't work, go to declaration?"
+		- [ ] Convert found javascript file to WAT, and then parse that as a document, and find the correct symbol

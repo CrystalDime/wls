@@ -1,9 +1,4 @@
-//! Abstract Syntax Tree for Zig source code.
-//! For Zig syntax, the root node is at nodes[0] and contains the list of
-//! sub-nodes.
-//! For Zon syntax, the root node is at nodes[0] and contains lhs as the node
-//! index of the main expression.
-
+const wat = @import("Wat.zig");
 /// Reference to externally-owned data.
 source: [:0]const u8,
 
@@ -20,7 +15,7 @@ pub const TokenIndex = u32;
 pub const ByteOffset = u32;
 
 pub const TokenList = std.MultiArrayList(struct {
-    tag: Token.Tag,
+    tag: wat.Token.Tag,
     start: ByteOffset,
 });
 pub const NodeList = std.MultiArrayList(Node);
@@ -65,7 +60,8 @@ pub fn parse(gpa: Allocator, source: [:0]const u8, mode: Mode) Allocator.Error!A
     const estimated_token_count = source.len / 8;
     try tokens.ensureTotalCapacity(gpa, estimated_token_count);
 
-    var tokenizer = std.zig.Tokenizer.init(source);
+    var tokenizer = wat.Tokenizer.init(source);
+
     while (true) {
         const token = tokenizer.next();
         try tokens.append(gpa, .{
@@ -86,6 +82,7 @@ pub fn parse(gpa: Allocator, source: [:0]const u8, mode: Mode) Allocator.Error!A
         .scratch = .{},
         .tok_i = 0,
     };
+
     defer parser.errors.deinit(gpa);
     defer parser.nodes.deinit(gpa);
     defer parser.extra_data.deinit(gpa);
@@ -93,6 +90,7 @@ pub fn parse(gpa: Allocator, source: [:0]const u8, mode: Mode) Allocator.Error!A
 
     // Empirically, Zig source code has a 2:1 ratio of tokens to AST nodes.
     // Make sure at least 1 so we can use appendAssumeCapacity on the root node below.
+    // TODO: Find a number that fits for the .wat files
     const estimated_node_count = (tokens.len + 2) / 2;
     try parser.nodes.ensureTotalCapacity(gpa, estimated_node_count);
 
@@ -121,11 +119,9 @@ pub fn render(tree: Ast, gpa: Allocator) RenderError![]u8 {
     return buffer.toOwnedSlice();
 }
 
-pub const Fixups = private_render.Fixups;
-
-pub fn renderToArrayList(tree: Ast, buffer: *std.ArrayList(u8), fixups: Fixups) RenderError!void {
-    return @import("./render.zig").renderTree(buffer, tree, fixups);
-}
+// pub fn renderToArrayList(tree: Ast, buffer: *std.ArrayList(u8), fixups: Fixups) RenderError!void {
+//     return @import("./render.zig").renderTree(buffer, tree, fixups);
+// }
 
 /// Returns an extra offset for column and byte offset of errors that
 /// should point after the token in the error message.
@@ -461,13 +457,22 @@ pub fn renderError(tree: Ast, parse_error: Error, stream: anytype) !void {
             const found_tag = token_tags[parse_error.token + @intFromBool(parse_error.token_is_prev)];
             const expected_symbol = parse_error.extra.expected_tag.symbol();
             switch (found_tag) {
-                .invalid => return stream.print("expected '{s}', found invalid bytes", .{
+                .reserved => return stream.print("expected '{s}', found invalid bytes", .{
                     expected_symbol,
                 }),
                 else => return stream.print("expected '{s}', found '{s}'", .{
                     expected_symbol, found_tag.symbol(),
                 }),
             }
+        },
+        .expected_value_type => {
+            return stream.writeAll("Expected a value type");
+        },
+        .expected_number => {
+            return stream.writeAll("Expected a number");
+        },
+        .expected_import_desc => {
+            return stream.writeAll("Expected import desc");
         },
     }
 }
@@ -2961,6 +2966,11 @@ pub const Error = struct {
 
         /// `expected_tag` is populated.
         expected_token,
+
+        /// start of .wat errors
+        expected_value_type,
+        expected_number,
+        expected_import_desc,
     };
 };
 
@@ -3446,6 +3456,27 @@ pub const Node = struct {
         /// `lhs!rhs`. main_token is the `!`.
         error_union,
 
+        // start of wat values
+        value_type_i32,
+        value_type_i64,
+        value_type_f32,
+        value_type_f64,
+        value_type_tuple,
+        func_type,
+        type_def,
+        import_def,
+        type_use,
+        float,
+        import_desc_func,
+        import_desc_table,
+        import_desc_memory,
+        import_desc_global,
+        table_type_funcref,
+        table_type,
+        global_type,
+        limits,
+        mut,
+        import,
         pub fn isContainerField(tag: Tag) bool {
             return switch (tag) {
                 .container_field_init,
@@ -3618,9 +3649,7 @@ const Token = std.zig.Token;
 const Ast = @This();
 const Allocator = std.mem.Allocator;
 const Parse = @import("Parse.zig");
-const private_render = @import("./render.zig");
 
 test {
     _ = Parse;
-    _ = private_render;
 }

@@ -187,6 +187,7 @@ fn parseModule(p: *Parse) Allocator.Error!Members {
     const scratch_top = p.scratch.items.len;
     defer p.scratch.shrinkRetainingCapacity(scratch_top);
 
+    _ = p.eatDocComments() catch {};
     _ = p.expectToken(.l_paren) catch {};
     _ = p.expectToken(.keyword_module) catch {};
 
@@ -197,9 +198,8 @@ fn parseModule(p: *Parse) Allocator.Error!Members {
                 continue;
             },
         };
-        if (module_field == 0) {
+        if (module_field == null_node) {
             _ = p.expectToken(.r_paren) catch {};
-            std.debug.print("\n {} \n", .{p});
             break;
         }
         try p.scratch.append(p.gpa, module_field);
@@ -250,6 +250,7 @@ fn parseModule(p: *Parse) Allocator.Error!Members {
 ///      / LPAREN KEYWORD_elem Elem RPAREN
 ///      / LPAREN KEYWORD_data Data RPAREN
 fn expectModuleField(p: *Parse) !Node.Index {
+    _ = p.eatDocComments() catch {};
     _ = p.eatToken(.l_paren) orelse return null_node;
     _ = try p.expectToken(.r_paren);
 
@@ -399,17 +400,17 @@ fn parseDecimalNumber(p: *Parse) !Node.Index {
 
 /// Skips over doc comment tokens. Returns the first one, if any.
 fn eatDocComments(p: *Parse) Allocator.Error!?TokenIndex {
-    if (p.eatToken(.doc_comment)) |tok| {
-        var first_line = tok;
+    if (p.eatToken(.comment_line) orelse p.eatToken(.comment_block)) |tok| {
+        var first_comment = tok;
         if (tok > 0 and tokensOnSameLine(p, tok - 1, tok)) {
             try p.warnMsg(.{
                 .tag = .same_line_doc_comment,
                 .token = tok,
             });
-            first_line = p.eatToken(.doc_comment) orelse return null;
+            first_comment = p.eatToken(.comment_line) orelse p.eatToken(.comment_block) orelse return null;
         }
-        while (p.eatToken(.doc_comment)) |_| {}
-        return first_line;
+        while (p.eatToken(.comment_line) orelse p.eatToken(.comment_block)) |_| {}
+        return first_comment;
     }
     return null;
 }

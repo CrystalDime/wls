@@ -244,6 +244,9 @@ pub const Tokenizer = struct {
             },
         };
 
+        // a variable used to track the current nest level of comments;
+        var commentDepth: usize = 0;
+
         while (true) : (self.index += 1) {
             const c = self.buffer[self.index];
             switch (state) {
@@ -284,7 +287,8 @@ pub const Tokenizer = struct {
                         if (self.index + 1 < self.buffer.len and self.buffer[self.index + 1] == ';') {
                             state = .comment_block;
                             result.tag = .comment_block;
-                            self.index += 1;
+                            self.index += 2;
+                            commentDepth += 1;
                         } else {
                             result.tag = .l_paren;
                             self.index += 1;
@@ -316,7 +320,7 @@ pub const Tokenizer = struct {
                     },
                 },
                 .identifier => switch (c) {
-                    ' ', '\t', ')', 0 => {
+                    ' ', '\t', '\n', ')', '\r', 0 => {
                         if (Token.getKeyword(self.buffer[result.loc.start..self.index])) |tag| {
                             result.tag = tag;
                         }
@@ -418,37 +422,29 @@ pub const Tokenizer = struct {
                     else => {},
                 },
                 .comment_block => switch (c) {
-                    '(' => {
-                        if (self.index + 1 < self.buffer.len and self.buffer[self.index + 1] == ';') {
-                            // Entering a nested block comment
-                            self.index += 1;
-                        }
-                    },
                     ';' => {
                         if (self.index + 1 < self.buffer.len and self.buffer[self.index + 1] == ')') {
-                            self.index += 1;
-                            var nested_level: usize = 1;
-                            while (self.index + 1 < self.buffer.len) : (self.index += 1) {
-                                const next_char = self.buffer[self.index + 1];
-                                if (next_char == '(' and self.index + 2 < self.buffer.len and self.buffer[self.index + 2] == ';') {
-                                    // Entering a nested block comment
-                                    nested_level += 1;
-                                    self.index += 1;
-                                } else if (next_char == ';' and self.index + 2 < self.buffer.len and self.buffer[self.index + 2] == ')') {
-                                    // Exiting a block comment
-                                    nested_level -= 1;
-                                    self.index += 1;
-                                    if (nested_level == 0) {
-                                        self.index += 1;
-                                        state = .start;
-                                        result.loc.start = self.index;
-                                        break;
-                                    }
-                                }
+                            self.index += 2;
+
+                            if (commentDepth == 1) {
+                                state = .start;
+                                break;
+                            } else {
+                                state = .comment_block;
+                                commentDepth -= 1;
                             }
                         }
                     },
-                    0 => break,
+                    '(' => {
+                        if (self.index + 1 < self.buffer.len and self.buffer[self.index + 1] == ';') {
+                            self.index += 2;
+                            commentDepth += 1;
+                        }
+                    },
+                    0 => {
+                        result.tag = .reserved;
+                        break;
+                    },
                     else => {},
                 },
                 .reserved => switch (c) {
@@ -505,6 +501,16 @@ test "nested block comment" {
     try testTokenize(
         \\(; outer (; inner ;) outer ;)
     , &.{.comment_block});
+}
+
+test "nested block comment2" {
+    try testTokenize(
+        \\ ;; Nothing ever happens.
+        \\(; Nested is valid (; Nothing ever happens.  ;) Even more comments ;)
+        \\(module)
+        \\
+        \\
+    , &.{ .comment_line, .comment_block, .l_paren, .keyword_module, .r_paren });
 }
 
 test "integers" {
@@ -584,7 +590,6 @@ fn testTokenize(source: [:0]const u8, expected_token_tags: []const Token.Tag) !v
     for (expected_token_tags) |expected_token_tag| {
         const token = tokenizer.next();
         if (token.tag != expected_token_tag) {
-            std.debug.print("Expected {s}, but got ", .{@tagName(expected_token_tag)});
             tokenizer.dump(&token);
             return error.TestFailed;
         }

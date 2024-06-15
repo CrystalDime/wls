@@ -7,6 +7,28 @@ test "parse blank .wat module" {
     try testCanonical(source);
 }
 
+test "parse .wat module, missing ending parenthetical" {
+    const source =
+        \\(module
+        \\
+        \\
+    ;
+    try testError(source, &[_]Error{.expected_token});
+}
+
+test "parse blank .wat module, with leading comments" {
+    const source =
+        \\ ;; Nothing ever happens.
+        \\ (; Nested is valid (; Nothing ever happens.  ;) Even more comments ;)
+        \\(module
+        \\                ;; Nothing even happens
+        \\           )
+        \\
+        \\
+    ;
+    try testCanonical(source);
+}
+
 const std = @import("std");
 const Ast = @import("Ast.zig");
 const mem = std.mem;

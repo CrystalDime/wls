@@ -101,7 +101,8 @@ pub const Token = struct {
             return switch (tag) {
                 .identifier,
                 .string,
-                .number,
+                .integer,
+                .float,
                 .eof,
                 .reserved,
                 .comment_block,
@@ -150,7 +151,8 @@ pub const Token = struct {
             return tag.lexeme() orelse switch (tag) {
                 .identifier => "an identifier",
                 .string => "a string",
-                .number => "a number literal",
+                .integer => "a number literal",
+                .float => "a float literal",
                 .eof => "EOF",
                 .comment_block => "a block comment",
                 .comment_line => "a line comment",
@@ -194,6 +196,38 @@ pub const Tokenizer = struct {
         comment_block,
         reserved,
     };
+
+    /// This is a workaround to the fact that the tokenizer can queue up
+    /// 'pending_invalid_token's when parsing literals, which means that we need
+    /// to scan from the start of the current line to find a matching tag - just
+    /// in case it was an invalid character generated during literal
+    /// tokenization. Ideally this processing of this would be pushed to the AST
+    /// parser or another later stage, both to give more useful error messages
+    /// with that extra context and in order to be able to remove this
+    /// workaround.
+    pub fn findTagAtCurrentIndex(self: *Tokenizer, tag: Token.Tag) Token {
+        if (tag == .reserved) {
+            const target_index = self.index;
+            var starting_index = target_index;
+            while (starting_index > 0) {
+                if (self.buffer[starting_index] == '\n') {
+                    break;
+                }
+                starting_index -= 1;
+            }
+
+            self.index = starting_index;
+            while (self.index <= target_index or self.pending_invalid_token != null) {
+                const result = self.next();
+                if (result.loc.start == target_index and result.tag == tag) {
+                    return result;
+                }
+            }
+            unreachable;
+        } else {
+            return self.next();
+        }
+    }
 
     pub fn next(self: *Tokenizer) Token {
         if (self.pending_invalid_token) |token| {
@@ -282,16 +316,17 @@ pub const Tokenizer = struct {
                     },
                 },
                 .identifier => switch (c) {
-                    ' ', '"', ',', ';', 0 => {
+                    ' ', '\t', ')', 0 => {
                         if (Token.getKeyword(self.buffer[result.loc.start..self.index])) |tag| {
                             result.tag = tag;
                         }
                         break;
                     },
-                    33 => {}, // Excludes the space and other specific characters
-                    35...43 => {}, // Excludes ", and ,
-                    45...58 => {}, // Excludes ;
-                    60...126 => {}, // Excludes 0 which is a null character
+                    33...34 => {}, // Excludes the space and "
+                    36...40 => {}, // Excludes (, )
+                    42...43 => {}, // Excludes ,
+                    45...57 => {}, // Excludes ;
+                    59...126 => {}, // Excludes ( which is 40
                     else => {
                         result.tag = .reserved;
                         break;
@@ -447,6 +482,16 @@ test "line comment" {
     , &.{
         .comment_line,
         .l_paren,
+    });
+}
+
+test "module" {
+    try testTokenize(
+        \\(module)
+    , &.{
+        .l_paren,
+        .keyword_module,
+        .r_paren,
     });
 }
 

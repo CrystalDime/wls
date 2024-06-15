@@ -1,6 +1,6 @@
 //! Represents in-progress parsing, will be converted to an Ast after completion.
 
-pub const Error = error{ParseError} || Allocator.Error;
+pub const Error = error{ParseError} || Allocator.Error; // add ParseError
 
 gpa: Allocator,
 source: []const u8,
@@ -168,43 +168,73 @@ pub fn parseRoot(p: *Parse) !void {
         .main_token = 0,
         .data = undefined,
     });
+
     const module = try p.parseModule();
+    const root_range = try module.toSpan(p);
+
     if (p.token_tags[p.tok_i] != .eof) {
         try p.warnExpected(.eof);
     }
 
     p.nodes.items(.data)[0] = .{
-        .lhs = module,
-        .rhs = undefined,
+        .lhs = root_range.start,
+        .rhs = root_range.end,
     };
 }
 
 /// Module <- ModuleField*
-fn parseModule(p: *Parse) !Node.Index {
+fn parseModule(p: *Parse) Allocator.Error!Members {
     const scratch_top = p.scratch.items.len;
     defer p.scratch.shrinkRetainingCapacity(scratch_top);
 
+    _ = p.expectToken(.l_paren) catch {};
+    _ = p.expectToken(.keyword_module) catch {};
+
     while (true) {
-        const module_field = try p.parseModuleField();
-        if (module_field == 0) break;
+        const module_field = p.expectModuleField() catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ParseError => {
+                continue;
+            },
+        };
+        if (module_field == 0) {
+            _ = p.expectToken(.r_paren) catch {};
+            std.debug.print("\n {} \n", .{p});
+            break;
+        }
         try p.scratch.append(p.gpa, module_field);
     }
 
     const fields = p.scratch.items[scratch_top..];
-    if (fields.len == 0) {
-        return null_node;
-    } else if (fields.len == 1) {
-        return fields[0];
-    } else {
-        const span = try p.listToSpan(fields);
-        return p.addNode(.{
-            .tag = .module,
-            .main_token = fields[0],
-            .data = .{
+    const trailing = false;
+    switch (fields.len) {
+        0 => return Members{
+            .len = 0,
+            .lhs = 0,
+            .rhs = 0,
+            .trailing = true,
+        },
+        1 => return Members{
+            .len = 1,
+            .lhs = fields[0],
+            .rhs = 0,
+            .trailing = trailing,
+        },
+        2 => return Members{
+            .len = 2,
+            .lhs = fields[0],
+            .rhs = fields[1],
+            .trailing = trailing,
+        },
+        else => {
+            const span = try p.listToSpan(fields);
+            return Members{
+                .len = fields.len,
                 .lhs = span.start,
                 .rhs = span.end,
-            },
-        });
+                .trailing = trailing,
+            };
+        },
     }
 }
 
@@ -219,14 +249,14 @@ fn parseModule(p: *Parse) !Node.Index {
 ///      / LPAREN KEYWORD_start Start RPAREN
 ///      / LPAREN KEYWORD_elem Elem RPAREN
 ///      / LPAREN KEYWORD_data Data RPAREN
-fn parseModuleField(p: *Parse) !Node.Index {
+fn expectModuleField(p: *Parse) !Node.Index {
     _ = p.eatToken(.l_paren) orelse return null_node;
     _ = try p.expectToken(.r_paren);
 
     const tok = p.nextToken();
     switch (p.token_tags[tok]) {
         .keyword_type => {
-            const type_def = try p.parseTypeDef();
+            const type_def = try parseNat(p);
             return p.addNode(.{
                 .tag = .type_def,
                 .main_token = tok - 1,
@@ -236,391 +266,108 @@ fn parseModuleField(p: *Parse) !Node.Index {
                 },
             });
         },
-        .keyword_import => {
-            const import_def = try p.parseImport();
-            return p.addNode(.{
-                .tag = .import_def,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = import_def,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_func => {
-            const func_def = try p.parseFuncDef();
-            return p.addNode(.{
-                .tag = .func_def,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = func_def,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_table => {
-            const table_def = try p.parseTableDef();
-            return p.addNode(.{
-                .tag = .table_def,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = table_def,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_memory => {
-            const memory_def = try p.parseMemoryDef();
-            return p.addNode(.{
-                .tag = .memory_def,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = memory_def,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_global => {
-            const global_def = try p.parseGlobalDef();
-            return p.addNode(.{
-                .tag = .global_def,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = global_def,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_export => {
-            const export_def = try p.parseExport();
-            return p.addNode(.{
-                .tag = .export_def,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = export_def,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_start => {
-            const start_def = try p.parseStart();
-            return p.addNode(.{
-                .tag = .start_def,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = start_def,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_elem => {
-            const elem_def = try p.parseElem();
-            return p.addNode(.{
-                .tag = .elem_def,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = elem_def,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_data => {
-            const data_def = try p.parseData();
-            return p.addNode(.{
-                .tag = .data_def,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = data_def,
-                    .rhs = undefined,
-                },
-            });
-        },
-        else => return p.fail(.expected_module_field),
+        // .keyword_import => {
+        //     ////const import_def = try p.parseImport();
+        //     //return p.addNode(.{
+        //     //    .tag = .import_def,
+        //     //    .main_token = tok - 1,
+        //     //    .data = .{
+        //     //        .lhs = import_def,
+        //     //        .rhs = undefined,
+        //     //    },
+        //     //});
+        // },
+        // .keyword_func => {
+        //     ////const func_def = try p.parseFuncDef();
+        //     //return p.addNode(.{
+        //     //    .tag = .func_def,
+        //     //    .main_token = tok - 1,
+        //     //    .data = .{
+        //     //        .lhs = func_def,
+        //     //        .rhs = undefined,
+        //     //    },
+        //     //});
+        // },
+        // .keyword_table => {
+        //     // const table_def = try p.parseTableDef();
+        //     // return p.addNode(.{
+        //     //     .tag = .table_def,
+        //     //     .main_token = tok - 1,
+        //     //     .data = .{
+        //     //         .lhs = table_def,
+        //     //         .rhs = undefined,
+        //     //     },
+        //     // });
+        // },
+        // .keyword_memory => {
+        //     const memory_def = try p.parseMemoryDef();
+        //     return p.addNode(.{
+        //         .tag = .memory_def,
+        //         .main_token = tok - 1,
+        //         .data = .{
+        //             .lhs = memory_def,
+        //             .rhs = undefined,
+        //         },
+        //     });
+        // },
+        // .keyword_global => {
+        //     const global_def = try p.parseGlobalDef();
+        //     return p.addNode(.{
+        //         .tag = .global_def,
+        //         .main_token = tok - 1,
+        //         .data = .{
+        //             .lhs = global_def,
+        //             .rhs = undefined,
+        //         },
+        //     });
+        // },
+        // .keyword_export => {
+        //     const export_def = try p.parseExport();
+        //     return p.addNode(.{
+        //         .tag = .export_def,
+        //         .main_token = tok - 1,
+        //         .data = .{
+        //             .lhs = export_def,
+        //             .rhs = undefined,
+        //         },
+        //     });
+        // },
+        // .keyword_start => {
+        //     const start_def = try p.parseStart();
+        //     return p.addNode(.{
+        //         .tag = .start_def,
+        //         .main_token = tok - 1,
+        //         .data = .{
+        //             .lhs = start_def,
+        //             .rhs = undefined,
+        //         },
+        //     });
+        // },
+        // .keyword_elem => {
+        //     const elem_def = try p.parseElem();
+        //     return p.addNode(.{
+        //         .tag = .elem_def,
+        //         .main_token = tok - 1,
+        //         .data = .{
+        //             .lhs = elem_def,
+        //             .rhs = undefined,
+        //         },
+        //     });
+        // },
+        // .keyword_data => {
+        //     const data_def = try p.parseData();
+        //     return p.addNode(.{
+        //         .tag = .data_def,
+        //         .main_token = tok - 1,
+        //         .data = .{
+        //             .lhs = data_def,
+        //             .rhs = undefined,
+        //         },
+        //     });
+        // },
+        else => return null_node,
     }
 }
-
-/// TypeDef <- FuncType
-fn parseTypeDef(p: *Parse) !Node.Index {
-    return p.parseFuncType();
-}
-
-/// FuncType <- LPAREN KEYWORD_func LPAREN ValueType* RPAREN ValueType* RPAREN
-fn parseFuncType(p: *Parse) !Node.Index {
-    _ = try p.expectToken(.l_paren);
-    _ = try p.expectToken(.keyword_func);
-    _ = try p.expectToken(.l_paren);
-    const param_types = try p.parseValueTypes();
-    _ = try p.expectToken(.r_paren);
-    const result_types = try p.parseValueTypes();
-    _ = try p.expectToken(.r_paren);
-
-    return p.addNode(.{
-        .tag = .func_type,
-        .main_token = p.tok_i - 1,
-        .data = .{
-            .lhs = param_types,
-            .rhs = result_types,
-        },
-    });
-}
-
-/// ValueType <- KEYWORD_i32 / KEYWORD_i64 / KEYWORD_f32 / KEYWORD_f64 / KEYWORD_v128
-fn parseValueType(p: *Parse) !Node.Index {
-    const tok = p.nextToken();
-    switch (p.token_tags[tok]) {
-        .keyword_i32 => {
-            return p.addNode(.{
-                .tag = .value_type_i32,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = undefined,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_i64 => {
-            return p.addNode(.{
-                .tag = .value_type_i64,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = undefined,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_f32 => {
-            return p.addNode(.{
-                .tag = .value_type_f32,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = undefined,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_f64 => {
-            return p.addNode(.{
-                .tag = .value_type_f64,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = undefined,
-                    .rhs = undefined,
-                },
-            });
-        },
-        else => return p.fail(.expected_value_type),
-    }
-}
-
-/// ValueType*
-fn parseValueTypes(p: *Parse) !Node.Index {
-    const scratch_top = p.scratch.items.len;
-    defer p.scratch.shrinkRetainingCapacity(scratch_top);
-
-    while (true) {
-        const value_type = p.parseValueType() catch |err| switch (err) {
-            error.ParseError => break,
-            else => |e| return e,
-        };
-        try p.scratch.append(p.gpa, value_type);
-    }
-
-    const value_types = p.scratch.items[scratch_top..];
-    if (value_types.len == 0) {
-        return null_node;
-    } else if (value_types.len == 1) {
-        return value_types[0];
-    } else {
-        const span = try p.listToSpan(value_types);
-        return p.addNode(.{
-            .tag = .value_type_tuple,
-            .main_token = value_types[0],
-            .data = .{
-                .lhs = span.start,
-                .rhs = span.end,
-            },
-        });
-    }
-}
-
-/// Import <- LPAREN KEYWORD_import STRING STRING LPAREN ImportDesc RPAREN RPAREN
-fn parseImport(p: *Parse) !Node.Index {
-    _ = try p.expectToken(.l_paren);
-    _ = try p.expectToken(.keyword_import);
-    const module_str = try p.expectString();
-    const field_str = try p.expectString();
-    _ = try p.expectToken(.l_paren);
-    const import_desc = try p.parseImportDesc();
-    _ = try p.expectToken(.r_paren);
-    _ = try p.expectToken(.r_paren);
-
-    return p.addNode(.{
-        .tag = .import,
-        .main_token = p.tok_i - 1,
-        .data = .{
-            .lhs = try p.addExtra(.{
-                .module_str = module_str,
-                .field_str = field_str,
-            }),
-            .rhs = import_desc,
-        },
-    });
-}
-
-/// ImportDesc
-///     <- KEYWORD_func TypeUse?
-///      / KEYWORD_table TableType
-///      / KEYWORD_memory MemoryType
-///      / KEYWORD_global GlobalType
-fn parseImportDesc(p: *Parse) !Node.Index {
-    const tok = p.nextToken();
-    switch (p.token_tags[tok]) {
-        .keyword_func => {
-            const type_use = try p.parseTypeUse();
-            return p.addNode(.{
-                .tag = .import_desc_func,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = type_use,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_table => {
-            const table_type = try p.parseTableType();
-            return p.addNode(.{
-                .tag = .import_desc_table,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = table_type,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_memory => {
-            const memory_type = try p.parseMemoryType();
-            return p.addNode(.{
-                .tag = .import_desc_memory,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = memory_type,
-                    .rhs = undefined,
-                },
-            });
-        },
-        .keyword_global => {
-            const global_type = try p.parseGlobalType();
-            return p.addNode(.{
-                .tag = .import_desc_global,
-                .main_token = tok - 1,
-                .data = .{
-                    .lhs = global_type,
-                    .rhs = undefined,
-                },
-            });
-        },
-        else => return p.fail(.expected_import_desc),
-    }
-}
-
-/// TypeUse <- LPAREN KEYWORD_type NAT RPAREN
-fn parseTypeUse(p: *Parse) !Node.Index {
-    _ = p.eatToken(.l_paren) orelse return null_node;
-    _ = try p.expectToken(.keyword_type);
-    const type_index = try p.parseNat();
-    _ = try p.expectToken(.r_paren);
-
-    return p.addNode(.{
-        .tag = .type_use,
-        .main_token = p.tok_i - 1,
-        .data = .{
-            .lhs = type_index,
-            .rhs = undefined,
-        },
-    });
-}
-
-/// TableType <- KEYWORD_funcref / ValueType LimitsOpt
-fn parseTableType(p: *Parse) !Node.Index {
-    if (p.eatToken(.keyword_funcref)) |_| {
-        return p.addNode(.{
-            .tag = .table_type_funcref,
-            .main_token = p.tok_i - 1,
-            .data = .{
-                .lhs = undefined,
-                .rhs = undefined,
-            },
-        });
-    }
-
-    const value_type = try p.parseValueType();
-    const limits = try p.parseLimitsOpt();
-
-    return p.addNode(.{
-        .tag = .table_type,
-        .main_token = p.tok_i - 1,
-        .data = .{
-            .lhs = value_type,
-            .rhs = limits,
-        },
-    });
-}
-
-/// MemoryType <- LimitsOpt
-fn parseMemoryType(p: *Parse) !Node.Index {
-    return p.parseLimitsOpt();
-}
-
-/// GlobalType <- ValueType Mut
-fn parseGlobalType(p: *Parse) !Node.Index {
-    const value_type = try p.parseValueType();
-    const mut = try p.parseMut();
-
-    return p.addNode(.{
-        .tag = .global_type,
-        .main_token = p.tok_i - 1,
-        .data = .{
-            .lhs = value_type,
-            .rhs = mut,
-        },
-    });
-}
-
-/// Mut <- LPAREN KEYWORD_mut RPAREN
-fn parseMut(p: *Parse) !Node.Index {
-    _ = p.eatToken(.l_paren) orelse return null_node;
-    _ = try p.expectToken(.keyword_mut);
-    _ = try p.expectToken(.r_paren);
-
-    return p.addNode(.{
-        .tag = .mut,
-        .main_token = p.tok_i - 1,
-        .data = .{
-            .lhs = undefined,
-            .rhs = undefined,
-        },
-    });
-}
-
-/// LimitsOpt <- LPAREN KEYWORD_limits NAT NAT? RPAREN
-fn parseLimitsOpt(p: *Parse) !Node.Index {
-    _ = p.eatToken(.l_paren) orelse return null_node;
-    _ = try p.expectToken(.keyword_limits);
-    const min = try p.parseNat();
-    const max = try p.parseNatOpt();
-    _ = try p.expectToken(.r_paren);
-
-    return p.addNode(.{
-        .tag = .limits,
-        .main_token = p.tok_i - 1,
-        .data = .{
-            .lhs = min,
-            .rhs = max,
-        },
-    });
-}
-
-// ... (rest of the parsing functions for .wat grammar) ...
 
 /// NAT <- DecimalNumber
 fn parseNat(p: *Parse) !Node.Index {
@@ -683,6 +430,7 @@ fn expectToken(p: *Parse, tag: Token.Tag) Error!TokenIndex {
             .extra = .{ .expected_tag = tag },
         });
     }
+
     return p.nextToken();
 }
 

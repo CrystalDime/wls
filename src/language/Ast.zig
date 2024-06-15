@@ -109,19 +109,21 @@ pub fn parse(gpa: Allocator, source: [:0]const u8, mode: Mode) Allocator.Error!A
     };
 }
 
-/// `gpa` is used for allocating the resulting formatted source code.
-/// Caller owns the returned slice of bytes, allocated with `gpa`.
-pub fn render(tree: Ast, gpa: Allocator) RenderError![]u8 {
-    var buffer = std.ArrayList(u8).init(gpa);
-    defer buffer.deinit();
-
-    try tree.renderToArrayList(&buffer, .{});
-    return buffer.toOwnedSlice();
-}
-
+// /// `gpa` is used for allocating the resulting formatted source code.
+// /// Caller owns the returned slice of bytes, allocated with `gpa`.
+// pub fn render(tree: Ast, gpa: Allocator) RenderError![]u8 {
+//     var buffer = std.ArrayList(u8).init(gpa);
+//     defer buffer.deinit();
+//
+//     try tree.renderToArrayList(&buffer, .{});
+//     return buffer.toOwnedSlice();
+// }
+//
 // pub fn renderToArrayList(tree: Ast, buffer: *std.ArrayList(u8), fixups: Fixups) RenderError!void {
 //     return @import("./render.zig").renderTree(buffer, tree, fixups);
 // }
+//
+// pub const Fixups = private_render.Fixups;
 
 /// Returns an extra offset for column and byte offset of errors that
 /// should point after the token in the error message.
@@ -181,7 +183,7 @@ pub fn tokenSlice(tree: Ast, token_index: TokenIndex) []const u8 {
     }
 
     // For some tokens, re-tokenization is needed to find the end.
-    var tokenizer: std.zig.Tokenizer = .{
+    var tokenizer: wat.Tokenizer = .{
         .buffer = tree.source,
         .index = token_starts[token_index],
         .pending_invalid_token = null,
@@ -473,6 +475,9 @@ pub fn renderError(tree: Ast, parse_error: Error, stream: anytype) !void {
         },
         .expected_import_desc => {
             return stream.writeAll("Expected import desc");
+        },
+        .expected_module_field => {
+            return stream.writeAll("Expected module field");
         },
     }
 }
@@ -2971,6 +2976,7 @@ pub const Error = struct {
         expected_value_type,
         expected_number,
         expected_import_desc,
+        expected_module_field,
     };
 };
 
@@ -3477,6 +3483,12 @@ pub const Node = struct {
         limits,
         mut,
         import,
+        bind_var,
+        func_spec_type_use,
+        local,
+        locals,
+        func_def,
+        module,
         pub fn isContainerField(tag: Tag) bool {
             return switch (tag) {
                 .container_field_init,
@@ -3645,10 +3657,11 @@ const std = @import("std");
 const assert = std.debug.assert;
 const testing = std.testing;
 const mem = std.mem;
-const Token = std.zig.Token;
+const Token = wat.Token;
 const Ast = @This();
 const Allocator = std.mem.Allocator;
 const Parse = @import("Parse.zig");
+const private_render = @import("./render.zig");
 
 test {
     _ = Parse;

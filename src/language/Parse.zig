@@ -199,6 +199,7 @@ fn parseModule(p: *Parse) Allocator.Error!Members {
             },
         };
         if (module_field == null_node) {
+            // Terminal for the closing paren for the MODULE, commenting because I somehow forgot this.
             _ = p.expectToken(.r_paren) catch {};
             break;
         }
@@ -252,15 +253,14 @@ fn parseModule(p: *Parse) Allocator.Error!Members {
 fn expectModuleField(p: *Parse) !Node.Index {
     _ = p.eatDocComments() catch {};
     _ = p.eatToken(.l_paren) orelse return null_node;
-    _ = try p.expectToken(.r_paren);
 
-    const tok = p.nextToken();
+    const tok = p.tok_i;
     switch (p.token_tags[tok]) {
         .keyword_type => {
             const type_def = try parseNat(p);
             return p.addNode(.{
                 .tag = .type_def,
-                .main_token = tok - 1,
+                .main_token = tok,
                 .data = .{
                     .lhs = type_def,
                     .rhs = undefined,
@@ -300,17 +300,11 @@ fn expectModuleField(p: *Parse) !Node.Index {
         //     //     },
         //     // });
         // },
-        // .keyword_memory => {
-        //     const memory_def = try p.parseMemoryDef();
-        //     return p.addNode(.{
-        //         .tag = .memory_def,
-        //         .main_token = tok - 1,
-        //         .data = .{
-        //             .lhs = memory_def,
-        //             .rhs = undefined,
-        //         },
-        //     });
-        // },
+        .keyword_memory => {
+            const memory_def = try p.parseMemoryDef();
+            _ = p.expectToken(.r_paren) catch {};
+            return memory_def;
+        },
         // .keyword_global => {
         //     const global_def = try p.parseGlobalDef();
         //     return p.addNode(.{
@@ -366,8 +360,85 @@ fn expectModuleField(p: *Parse) !Node.Index {
         //         },
         //     });
         // },
-        else => return null_node,
+        else => return p.failMsg(.{
+            .tag = .expected_block_or_field, //TODO: OR maybe unexpected identifier?
+            .token = p.tok_i,
+        }),
     }
+}
+
+/// MemoryDef
+///     Memory (Identifier) INTEGER (INTEGER)
+fn parseMemoryDef(p: *Parse) !Node.Index {
+    //TODO Go back and and the following comment to the ast tag definition
+    // For a memory def the lhs is the identfier, the right hand side is the limit
+    // For a limit the lhs is the min, and the rhs is the max
+
+    const memoryDef = p.eatToken(.keyword_memory) orelse return null_node;
+
+    const memorydef_index = try p.reserveNode(.memory_def);
+    errdefer p.unreserveNode(memorydef_index);
+
+    const optionalIdentifier = p.eatToken(.identifier);
+
+    var identifierNode = null_node;
+    if (optionalIdentifier) |tokenIndex| {
+        identifierNode = try p.addNode(.{
+            .tag = .identifier,
+            .main_token = tokenIndex,
+            .data = .{
+                .lhs = undefined,
+                .rhs = undefined,
+            },
+        });
+    }
+
+    const limitdef_index = try p.reserveNode(.limits);
+    errdefer p.unreserveNode(limitdef_index);
+
+    const memorySizeMinIndex = try p.expectToken(.integer); //TODO Consider converting to a warn or maybe not?
+
+    const memorySizeMinNode = try p.addNode(.{
+        .tag = .number_literal,
+        .main_token = memorySizeMinIndex,
+        .data = .{
+            .lhs = undefined,
+            .rhs = undefined,
+        },
+    });
+
+    // Max size is n optional portion of the memorydef
+    const optionalMaxSize = p.eatToken(.integer); //TODO Consider converting to a warn or maybe not?
+
+    var memorySizeMaxNode = null_node;
+    if (optionalMaxSize) |tokenIndex| {
+        memorySizeMaxNode = try p.addNode(.{
+            .tag = .number_literal,
+            .main_token = tokenIndex,
+            .data = .{
+                .lhs = undefined,
+                .rhs = undefined,
+            },
+        });
+    }
+
+    const limitdef_indexu32 = p.setNode(limitdef_index, .{
+        .tag = .limits,
+        .main_token = memorySizeMinIndex, // shrug idk
+        .data = .{
+            .lhs = memorySizeMinNode,
+            .rhs = memorySizeMaxNode,
+        },
+    });
+
+    return p.setNode(memorydef_index, .{
+        .tag = .memory_def,
+        .main_token = memoryDef,
+        .data = .{
+            .lhs = identifierNode,
+            .rhs = limitdef_indexu32,
+        },
+    });
 }
 
 /// NAT <- DecimalNumber

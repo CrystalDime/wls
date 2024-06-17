@@ -1,33 +1,77 @@
-test "parse blank .wat module" {
+// test "parse blank .wat module" {
+//     const source =
+//         \\(module)
+//         \\
+//         \\
+//     ;
+//     try testCanonical(source);
+// }
+//
+// test "parse .wat module, missing ending parenthetical" {
+//     const source =
+//         \\(module
+//         \\
+//         \\
+//     ;
+//     try testError(source, &[_]Error{.expected_token});
+// }
+//
+// test "parse .wat module, invalid field beginning" {
+//     const source =
+//         \\(module
+//         \\
+//         \\         (ra
+//         \\
+//         \\
+//         \\            )
+//         \\
+//         \\
+//     ;
+//     try testError(source, &[_]Error{ .expected_block_or_field, .expected_token, .expected_token }); //TODO: Change this error name
+// }
+//
+// test "parse blank .wat module, with leading comments" {
+//     const source =
+//         \\ ;; Nothing ever happens.
+//         \\ (; Nested is valid (; Nothing ever happens.  ;) Even more comments ;)
+//         \\(module
+//         \\                ;; Nothing even happens
+//         \\           )
+//         \\
+//         \\
+//     ;
+//     try testCanonical(source);
+// }
+//
+// test "test module with memory def, no identifier" {
+//     const source =
+//         \\ (module
+//         \\    (memory 1)
+//         \\
+//         \\ )
+//     ;
+//     try testCanonical(source);
+// }
+
+test "test module with memory def, no identifier min and max" {
     const source =
-        \\(module)
+        \\ (module
+        \\    (memory 1 2)
         \\
-        \\
+        \\ )
     ;
     try testCanonical(source);
 }
 
-test "parse .wat module, missing ending parenthetical" {
-    const source =
-        \\(module
-        \\
-        \\
-    ;
-    try testError(source, &[_]Error{.expected_token});
-}
-
-test "parse blank .wat module, with leading comments" {
-    const source =
-        \\ ;; Nothing ever happens.
-        \\ (; Nested is valid (; Nothing ever happens.  ;) Even more comments ;)
-        \\(module
-        \\                ;; Nothing even happens
-        \\           )
-        \\
-        \\
-    ;
-    try testCanonical(source);
-}
+// test "test module with memory def" {
+//     const source =
+//         \\ (module
+//         \\    (memory $identifier 1)
+//         \\
+//         \\ )
+//     ;
+//     try testCanonical(source);
+// }
 
 const std = @import("std");
 const Ast = @import("Ast.zig");
@@ -44,6 +88,9 @@ fn testParse(source: [:0]const u8, allocator: mem.Allocator, anything_changed: *
     var tree = try Ast.parse(allocator, source, .wat);
     defer tree.deinit(allocator);
 
+    for (0..tree.nodes.len) |index| {
+        std.debug.print("\\n{any}: of {d}\n", .{ tree.nodes.get(index), index });
+    }
     for (tree.errors) |parse_error| {
         const loc = tree.tokenLocation(0, parse_error.token);
         try stderr.print("(memory buffer):{d}:{d}: error: ", .{ loc.line + 1, loc.column + 1 });

@@ -3489,6 +3489,7 @@ pub const Node = struct {
         locals,
         func_def,
         module,
+        memory_def,
         pub fn isContainerField(tag: Tag) bool {
             return switch (tag) {
                 .container_field_init,
